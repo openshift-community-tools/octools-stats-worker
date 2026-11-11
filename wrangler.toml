@@ -15,3 +15,15 @@ database_id = "81e0f9fa-cacc-49f6-90d8-18f6cba834ea"
 [vars]
 ENVIRONMENT = "production"
 # ADMIN_TOKEN is a Worker secret, never a var: `wrangler secret put ADMIN_TOKEN`
+
+# Write rate limit (Workers Rate Limiting), counted per Cloudflare location, not
+# globally. The worker falls back to a per-isolate limiter when this binding is
+# absent. period must be 10 or 60. namespace_id is any positive integer (as a
+# string) that no other rate-limit binding in the account uses: bindings with the
+# same id share counters. Nothing needs to be created in advance.
+[[ratelimits]]
+name = "WRITE_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 20
+  period = 60

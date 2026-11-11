@@ -49,6 +49,8 @@ async function main() {
     const href = doc.spec?.href || null;
     const icon = doc.spec?.icon || null;
     const git = doc.spec?.git || null;
+    // spec.security is sent with every row: an object sets it, null clears it.
+    const security = doc.spec?.security && typeof doc.spec.security === 'object' ? doc.spec.security : null;
 
     if (ONLY_TOOL && toolId !== ONLY_TOOL) continue;
     if (!toolId || versions.length === 0) {
@@ -78,10 +80,13 @@ async function main() {
         href,
         icon,
         git,
+        security,
+        minStorefront: v.minStorefront ? String(v.minStorefront) : null,
+        versionSecurity: v.security && typeof v.security === 'object' ? v.security : null,
       };
 
       if (DRY_RUN) {
-        console.log(`  (dry run) ${JSON.stringify({ toolId, version: payload.version, openshift: payload.openshift, image: payload.image, gitRef: payload.gitRef })}`);
+        console.log(`  (dry run) ${JSON.stringify({ toolId, version: payload.version, openshift: payload.openshift, image: payload.image, gitRef: payload.gitRef, minStorefront: payload.minStorefront, security: security ? 'declared' : 'none' })}`);
         continue;
       }
 

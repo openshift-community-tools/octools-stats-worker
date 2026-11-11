@@ -13,10 +13,12 @@ Cloudflare Worker behind **https://api.octools.net**: the public catalog API for
 | GET | `/v1/stats` | none | Downloads and ratings |
 | GET | `/v1/versions`, `/v1/versions/:toolId` | none | Version rows |
 | POST | `/v1/versions` | **admin** | Upsert one version row |
-| POST | `/v1/stats/download` | none, rate-limited | Increment downloads (storefront Add) |
-| POST / DELETE | `/v1/stats/rating` | none, rate-limited | Upsert / remove a rating (deduped by cluster hash) |
+| POST | `/v1/stats/download` | none, rate-limited | Increment downloads (storefront Add; known tools only) |
+| POST / DELETE | `/v1/stats/rating` | none, rate-limited | Upsert / remove a rating (deduped by cluster hash; known tools only) |
 
-Version rows are keyed by `(toolId, version, openshift)`: **one row per OpenShift minor**, `openshift` is a single string and `image` is that minor's combined tag. Optional fields: `channel`, `gitRef`, `deployUrl`, and tile metadata (`category`, `description`, `displayName`, `href`, `icon`, `git`).
+Version rows are keyed by `(toolId, version, openshift)`: **one row per OpenShift minor**, `openshift` is a single string and `image` is that minor's combined tag. Optional fields: `channel`, `gitRef`, `deployUrl`, `minStorefront` (semver), `versionSecurity` (the row's `versions[].security`; like `security`, an object sets it, `null` clears it, omitting it leaves it unchanged), tile metadata (`category`, `description`, `displayName`, `href`, `icon`, `git`), and `security` (the tool's `spec.security`; an object sets it, `null` clears it, omitting it leaves it unchanged). Declarations are capped at 16 KB. `/v1/catalog` returns `security` per tool and `minStorefront` / `security` per version; storefronts older than 1.6 ignore them.
+
+**Writes from storefronts are accepted only for known tools:** a `toolId` must be a DNS-1123 name with at least one published version row, otherwise downloads and ratings get 404. Seed a new tool's rows before announcing it, or its first downloads won't count (storefronts ignore the error).
 
 ## Publishing a release (seeding)
 
@@ -43,6 +45,30 @@ npx wrangler secret put ADMIN_TOKEN < <that file>
 
 An old value that was ever committed must be treated as public and rotated, not just moved.
 
+The worker compares the token in constant time and **fails closed** if `ADMIN_TOKEN` is unset or empty. Repeated failed admin attempts from one IP are throttled (10 per minute, then HTTP 429); successful requests, such as a full `seed.js` run, are not limited.
+
+## Rate limits
+
+Writes (`/v1/stats/download`, `/v1/stats/rating`) are limited to 20 per minute per client IP, counted per Cloudflare location (see below).
+
+- With the `WRITE_LIMITER` binding in `wrangler.toml` (Workers Rate Limiting), the limit is shared by all isolates in a Cloudflare location. It is counted per location, not globally.
+- Without it, the worker falls back to a per-isolate in-memory limiter. That is weaker, because each isolate counts separately.
+- **Admin endpoints:** after 10 failed token attempts in a minute an IP gets 429 from that isolate, even with the right token, until the minute is over. Successful requests don't count, so seeding isn't slowed. This counter is per isolate; for a real limit add a Cloudflare WAF rate-limiting rule for `POST /v1/versions`.
+
+Known limits: ratings accept any well-formed cluster hash, so someone rotating IPs can still add rows (at most 20 writes per minute per IP); downloads and ratings are only accepted for tools with published versions.
+
+## Testing locally
+
+Nothing here touches production:
+
+```bash
+npm ci
+# In order: a plain glob sorts schema-v2.sql before schema.sql.
+for f in schema.sql schema-v2.sql schema-v3.sql schema-v4.sql schema-v5.sql; do npx wrangler d1 execute octools-stats --local --file=$f; done
+npx wrangler dev --local --var ADMIN_TOKEN:local-test-token
+curl -s localhost:8787/health
+```
+
 ## Deploying
 
 There is no CI; deploys are manual with a Cloudflare API token that has Workers and D1 permissions:
@@ -55,7 +81,7 @@ npx wrangler deploy
 
 ### Database migrations
 
-Schema files are applied in order: `schema.sql`, `schema-v2.sql`, `schema-v3.sql`, `schema-v4.sql` (v4 adds the tile metadata columns `/v1/catalog` selects). **Apply a migration before deploying code that needs it**, and record a restore point first:
+Schema files are applied in order: `schema.sql`, `schema-v2.sql`, `schema-v3.sql`, `schema-v4.sql` (v4 adds the tile metadata columns `/v1/catalog` selects), `schema-v5.sql` (v5 adds the security and `min_storefront` columns that worker 1.2 selects). **Apply a migration before deploying code that needs it**, and record a restore point first:
 
 ```bash
 npx wrangler d1 time-travel info octools-stats            # note the bookmark
