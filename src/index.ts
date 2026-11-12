@@ -389,7 +389,7 @@ async function handleGetStats(db: D1Database): Promise<Response> {
 }
 
 async function handlePostDownload(request: Request, db: D1Database): Promise<Response> {
-  let body: { toolId?: string };
+  let body: { toolId?: string; clusterHash?: string };
   try {
     body = await request.json();
   } catch {
@@ -400,8 +400,25 @@ async function handlePostDownload(request: Request, db: D1Database): Promise<Res
   if (!toolId || !TOOL_ID_RE.test(toolId)) {
     return errorResponse(400, 'Missing or invalid toolId');
   }
+  const clusterHash = body.clusterHash?.trim();
+  if (clusterHash !== undefined && clusterHash !== '' && !SHA256_RE.test(clusterHash)) {
+    return errorResponse(400, 'clusterHash must be a 64-character hex SHA-256 hash');
+  }
   if (!(await isKnownTool(db, toolId))) {
     return errorResponse(404, 'Unknown toolId (no published versions)');
+  }
+
+  // Storefronts since 1.6.1 send their cluster hash: each cluster counts once per tool, so
+  // re-adds, updates and repeated calls don't inflate the number. Older storefronts send no
+  // hash and still count every call.
+  if (clusterHash) {
+    const first = await db
+      .prepare('INSERT OR IGNORE INTO installs (tool_id, cluster_hash) VALUES (?, ?)')
+      .bind(toolId, clusterHash.toLowerCase())
+      .run();
+    if (!first.meta || first.meta.changes !== 1) {
+      return json({ ok: true, toolId, counted: false });
+    }
   }
 
   await db
@@ -412,7 +429,7 @@ async function handlePostDownload(request: Request, db: D1Database): Promise<Res
     .bind(toolId)
     .run();
 
-  return json({ ok: true, toolId });
+  return json({ ok: true, toolId, counted: true });
 }
 
 async function handlePostRating(request: Request, db: D1Database): Promise<Response> {
@@ -670,7 +687,7 @@ export default {
 
     // Health check
     if (pathname === '/health' && method === 'GET') {
-      return json({ ok: true, version: '1.2.0' });
+      return json({ ok: true, version: '1.3.0' });
     }
 
     // GET stats (read-only, cached)

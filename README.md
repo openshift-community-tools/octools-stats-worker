@@ -13,7 +13,7 @@ Cloudflare Worker behind **https://api.octools.net**: the public catalog API for
 | GET | `/v1/stats` | none | Downloads and ratings |
 | GET | `/v1/versions`, `/v1/versions/:toolId` | none | Version rows |
 | POST | `/v1/versions` | **admin** | Upsert one version row |
-| POST | `/v1/stats/download` | none, rate-limited | Increment downloads (storefront Add; known tools only) |
+| POST | `/v1/stats/download` | none, rate-limited | Count an install (storefront Add; known tools only). With `clusterHash` (storefront 1.6.1+) each cluster counts once per tool; without it every call counts |
 | POST / DELETE | `/v1/stats/rating` | none, rate-limited | Upsert / remove a rating (deduped by cluster hash; known tools only) |
 
 Version rows are keyed by `(toolId, version, openshift)`: **one row per OpenShift minor**, `openshift` is a single string and `image` is that minor's combined tag. Optional fields: `channel`, `gitRef`, `deployUrl`, `minStorefront` (semver), `versionSecurity` (the row's `versions[].security`; like `security`, an object sets it, `null` clears it, omitting it leaves it unchanged), tile metadata (`category`, `description`, `displayName`, `href`, `icon`, `git`), and `security` (the tool's `spec.security`; an object sets it, `null` clears it, omitting it leaves it unchanged). Declarations are capped at 16 KB. `/v1/catalog` returns `security` per tool and `minStorefront` / `security` per version; storefronts older than 1.6 ignore them.
@@ -64,7 +64,7 @@ Nothing here touches production:
 ```bash
 npm ci
 # In order: a plain glob sorts schema-v2.sql before schema.sql.
-for f in schema.sql schema-v2.sql schema-v3.sql schema-v4.sql schema-v5.sql; do npx wrangler d1 execute octools-stats --local --file=$f; done
+for f in schema.sql schema-v2.sql schema-v3.sql schema-v4.sql schema-v5.sql schema-v6.sql; do npx wrangler d1 execute octools-stats --local --file=$f; done
 npx wrangler dev --local --var ADMIN_TOKEN:local-test-token
 curl -s localhost:8787/health
 ```
@@ -81,7 +81,7 @@ npx wrangler deploy
 
 ### Database migrations
 
-Schema files are applied in order: `schema.sql`, `schema-v2.sql`, `schema-v3.sql`, `schema-v4.sql` (v4 adds the tile metadata columns `/v1/catalog` selects), `schema-v5.sql` (v5 adds the security and `min_storefront` columns that worker 1.2 selects). **Apply a migration before deploying code that needs it**, and record a restore point first:
+Schema files are applied in order: `schema.sql`, `schema-v2.sql`, `schema-v3.sql`, `schema-v4.sql` (v4 adds the tile metadata columns `/v1/catalog` selects), `schema-v5.sql` (v5 adds the security and `min_storefront` columns that worker 1.2 selects), `schema-v6.sql` (v6 adds the `installs` table worker 1.3 uses to count each cluster once). **Apply a migration before deploying code that needs it**, and record a restore point first:
 
 ```bash
 npx wrangler d1 time-travel info octools-stats            # note the bookmark
